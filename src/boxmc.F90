@@ -511,9 +511,12 @@ contains
       initial_dir = spherical_2_cartesian(phi0, theta) * [-one, -one, one]
       call bmc%half_spaces(vertices, origins, normals)
 
-      mincnt= max( 100_iintegers, int( 1e4_ireal_dp / numnodes, iintegers) )
-      mycnt = int(1e9_ireal_dp / numnodes, iintegers)
-      mycnt = min( max(mincnt, mycnt ), huge(k)-1 )
+      mincnt = int(1._ireal_dp/std_Sdir%rtol &
+             + 1._ireal_dp/std_Sdir%atol &
+             + 1._ireal_dp/std_Sdiff%rtol &
+             + 1._ireal_dp/std_Sdiff%atol, iintegers)
+      mycnt  = int(1e9_ireal_dp / numnodes, iintegers)
+      mycnt  = min( max(mincnt, mycnt ), huge(k)-1 )
       do k=1, mycnt
 
           if((k.gt.mincnt) .and. std_Sdir%converged .and. std_Sdiff%converged) exit
@@ -725,7 +728,9 @@ contains
     endif
 
     if(p%scattercnt.gt.1e9_iintegers) then
-      print *,'Scattercnt:',p%scattercnt,' -- maybe this photon got stuck? -- I will move this one out of the box but keep in mind, that this is a dirty hack i.e. absorption will be wrong!'
+      print *,'Scattercnt:',p%scattercnt,' -- maybe this photon got stuck?'// &
+              ' -- I will move this one out of the box but keep in mind,'// &
+              ' that this is a dirty hack i.e. absorption will be wrong!'
       call print_photon(p)
       p%alive=.False.
       call update_photon_loc(p, intersec_dist, kabs, ksca)

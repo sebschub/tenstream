@@ -21,8 +21,8 @@ module m_tenstream_options
 
   use m_data_parameters, only : init_mpi_data_parameters, ireals, iintegers, mpiint, &
     zero, one, i0, default_str_len
-  use m_optprop_parameters, only: lut_basename, coeff_mode
-  use m_helper_functions, only: CHKERR
+  use m_optprop_parameters, only: lut_basename, coeff_mode, stddev_atol, stddev_rtol
+  use m_helper_functions, only: CHKERR, CHKWARN
 
 #include "petsc/finclude/petsc.h"
   use petsc
@@ -40,7 +40,8 @@ module m_tenstream_options
     lskip_thermal     =.False., & ! Skip thermal calculations and just return zero for fluxes and absorption
     ltopography       =.False., & ! use raybending to include surface topography
     lforce_phi        =.False., & ! Force to use the phi given in options entries(overrides values given to tenstream calls
-    lforce_theta      =.False.
+    lforce_theta      =.False., & !
+    lLUT_mockup       =.False.
 
   real(ireals) :: twostr_ratio, &
     ident_dx,               &
@@ -95,6 +96,7 @@ contains
     logical :: ltenstr_view=.False.
 
     integer(mpiint) :: myid, numnodes
+    character(len=default_str_len) :: env_lut_basename
 
     call init_mpi_data_parameters(comm)
 
@@ -127,28 +129,32 @@ contains
       call CHKERR(1_mpiint, 'option -ident '//trim(ident)//' requires also -dx option')
     endif
 
-    options_max_solution_err = 0.01
-    call PetscOptionsGetReal(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER,"-max_solution_err",options_max_solution_err, lflg,ierr)  ; call CHKERR(ierr)
+    options_max_solution_err = 5e3_ireals/real(3600*24, ireals)
+    call PetscOptionsGetReal(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER,"-max_solution_err",&
+      options_max_solution_err, lflg,ierr)  ; call CHKERR(ierr)
 
     options_max_solution_time = 0
-    call PetscOptionsGetReal(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER,"-max_solution_time",options_max_solution_time, lflg,ierr)  ; call CHKERR(ierr)
+    call PetscOptionsGetReal(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER,"-max_solution_time",&
+      options_max_solution_time, lflg,ierr)  ; call CHKERR(ierr)
 
     call PetscOptionsGetReal(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER,"-dy",ident_dy, lflg,ierr)  ; call CHKERR(ierr)
     if(lflg.eqv.PETSC_FALSE) ident_dy = ident_dx
 
     options_phi=180; options_theta=0
-    call PetscOptionsGetReal(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER, "-phi"  , options_phi, lflg,ierr)     ; call CHKERR(ierr)
-    call PetscOptionsGetReal(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER, "-theta", options_theta, lflg,ierr) ; call CHKERR(ierr)
-    call PetscOptionsGetBool(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER, "-force_phi", lforce_phi, lflg , ierr) ;call CHKERR(ierr)
-    call PetscOptionsGetBool(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER, "-force_theta", lforce_theta, lflg , ierr) ;call CHKERR(ierr)
+    call PetscOptionsGetReal(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER, "-phi"  , options_phi, lflg,ierr); call CHKERR(ierr)
+    call PetscOptionsGetReal(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER, "-theta", options_theta, lflg,ierr); call CHKERR(ierr)
+    call PetscOptionsGetBool(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER, "-force_phi", lforce_phi, lflg , ierr); call CHKERR(ierr)
+    call PetscOptionsGetBool(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER, "-force_theta", lforce_theta, lflg, ierr); call CHKERR(ierr)
 
-    call PetscOptionsGetBool(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER,"-eddington",luse_eddington,lflg,ierr) ;call CHKERR(ierr)
+    call PetscOptionsGetBool(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER, "-eddington",luse_eddington,lflg,ierr); call CHKERR(ierr)
 
-    call PetscOptionsGetBool(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER , "-twostr" , ltwostr , lflg , ierr) ;call CHKERR(ierr)
+    call PetscOptionsGetBool(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER, "-twostr", ltwostr, lflg, ierr); call CHKERR(ierr)
 
-    call PetscOptionsGetBool(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER , "-hdf5_guess"   , luse_hdf5_guess   , lflg , ierr) ;call CHKERR(ierr)
+    call PetscOptionsGetBool(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER, "-hdf5_guess", &
+      luse_hdf5_guess, lflg, ierr); call CHKERR(ierr)
 
-    call PetscOptionsGetBool(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER , "-twostr_guess" , luse_twostr_guess , lflg , ierr) ;call CHKERR(ierr)
+    call PetscOptionsGetBool(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER, "-twostr_guess", &
+      luse_twostr_guess, lflg, ierr); call CHKERR(ierr)
     if(luse_twostr_guess) ltwostr = .True.
 
     if(luse_twostr_guess.and.luse_hdf5_guess) then
@@ -157,40 +163,61 @@ contains
     endif
 
     twostr_ratio = 2._ireals
-    call PetscOptionsGetReal(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER,"-twostr_ratio",twostr_ratio, lflg,ierr)  ; call CHKERR(ierr)
+    call PetscOptionsGetReal(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER,"-twostr_ratio",twostr_ratio, lflg,ierr); call CHKERR(ierr)
 
-    call PetscOptionsGetInt(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER,"-pert_xshift",pert_xshift, lflg,ierr) ; call CHKERR(ierr)
+    call PetscOptionsGetInt(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER,"-pert_xshift",pert_xshift, lflg,ierr); call CHKERR(ierr)
     if(lflg.eqv.PETSC_FALSE) pert_xshift=0
-    call PetscOptionsGetInt(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER,"-pert_yshift",pert_yshift, lflg,ierr) ; call CHKERR(ierr)
+    call PetscOptionsGetInt(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER,"-pert_yshift",pert_yshift, lflg,ierr); call CHKERR(ierr)
     if(lflg.eqv.PETSC_FALSE) pert_yshift=0
 
-    call PetscOptionsGetString(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER,'-lut_basename',lut_basename,lflg,ierr) ; call CHKERR(ierr)
+    call get_environment_variable("LUT_BASENAME", env_lut_basename, status=ierr)
+    if(ierr.eq.0) lut_basename = trim(env_lut_basename)
 
-    call PetscOptionsGetBool(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER , "-calc_nca" , lcalc_nca , lflg , ierr) ;call CHKERR(ierr)
+    call PetscOptionsGetString(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER,'-lut_basename', &
+      lut_basename, lflg, ierr); call CHKERR(ierr)
 
-    call PetscOptionsGetBool(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER , "-twostr_only" , ltwostr_only , lflg , ierr) ;call CHKERR(ierr)
+    lLUT_mockup=.False.
+    call PetscOptionsGetBool(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER, "-LUT_mockup", &
+      lLUT_mockup , lflg , ierr) ;call CHKERR(ierr)
+    if(lLUT_mockup) then
+      call CHKWARN(1_mpiint, 'Using LUT_mockup, setting the LUT constraints to zero. Your results will be wrong!')
+      stddev_atol = 1._ireals
+      stddev_rtol = 1._ireals
+    endif
+
+    call PetscOptionsGetBool(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER, "-calc_nca", &
+      lcalc_nca , lflg , ierr) ;call CHKERR(ierr)
+
+    call PetscOptionsGetBool(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER, "-twostr_only", &
+      ltwostr_only, lflg, ierr); call CHKERR(ierr)
     if(ltwostr_only) then
       twostr_ratio=zero
       ltwostr=.True.
       luse_twostr_guess=.True.
     endif
 
-    call PetscOptionsGetBool(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER ,"-topography" , ltopography, lflg, ierr) ;call CHKERR(ierr)
+    call PetscOptionsGetBool(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER, "-topography", &
+      ltopography, lflg, ierr); call CHKERR(ierr)
 
-    call PetscOptionsGetBool(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER ,"-skip_thermal" , lskip_thermal, lflg , ierr) ;call CHKERR(ierr)
+    call PetscOptionsGetBool(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER, "-skip_thermal", &
+      lskip_thermal, lflg, ierr); call CHKERR(ierr)
 
-    call PetscOptionsGetBool(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER ,"-schwarzschild" , lschwarzschild, lflg , ierr) ;call CHKERR(ierr)
+    call PetscOptionsGetBool(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER, "-schwarzschild", &
+      lschwarzschild, lflg, ierr); call CHKERR(ierr)
 
-    call PetscOptionsGetBool(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER ,"-mcrts" , lmcrts, lflg , ierr) ;call CHKERR(ierr)
+    call PetscOptionsGetBool(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER, "-mcrts", &
+      lmcrts, lflg, ierr); call CHKERR(ierr)
 
-    call PetscOptionsGetInt(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER,"-mcrts_photons_per_px", mcrts_photons_per_pixel, lflg,ierr) ; call CHKERR(ierr)
-    if(lflg.eqv.PETSC_FALSE) mcrts_photons_per_pixel=1000
+    mcrts_photons_per_pixel = 1000
+    call PetscOptionsGetInt(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER, "-mcrts_photons_per_px", &
+      mcrts_photons_per_pixel, lflg,ierr); call CHKERR(ierr)
 
+    coeff_mode=0 ! use LUT by default
+    call PetscOptionsGetInt(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER, "-coeff_mode", &
+      coeff_mode, lflg, ierr); call CHKERR(ierr)
 
-    call PetscOptionsGetInt(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER,"-coeff_mode", coeff_mode, lflg, ierr) ; call CHKERR(ierr)
-    if(lflg.eqv.PETSC_FALSE) coeff_mode=0 ! use LUT by default
-
-    call PetscOptionsGetBool(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER ,"-tenstr_view" , ltenstr_view, lflg, ierr) ;call CHKERR(ierr)
+    call PetscOptionsGetBool(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER, "-tenstr_view", &
+      ltenstr_view, lflg, ierr); call CHKERR(ierr)
     if(myid.eq.0.and.ltenstr_view) then
       print *,'********************************************************************'
       print *,'***   nr. of Nodes:',numnodes

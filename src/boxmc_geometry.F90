@@ -430,7 +430,8 @@ module m_boxmc_geometry
       enddo
 
       if(max_dist.gt.norm([dx,dy,dz])) then
-        print *,'should actually not be here at the end of crossings in intersect distance! - however, please check if distance makes sense?:', &
+        print *,'should actually not be here at the end of crossings in intersect distance! '// &
+                '- however, please check if distance makes sense?:', &
         max_dist, norm([dx,dy,dz]), '::', dist, ':', vertices, &
           'pdir', pdir, 'ploc side', ploc, psrc_side, 'target_side', pside
         call CHKERR(1_mpiint, 'DEBUG')
@@ -449,6 +450,7 @@ module m_boxmc_geometry
       integer(iintegers), intent(out) :: psubface
       integer(mpiint) :: ierr
 
+      real(ireal_dp),parameter :: rng(2) = [0._ireal_dp, huge(rng)]
       logical :: l_in_triangle
       logical :: lhit(5)
       real(ireal_dp) :: hit(5,4)
@@ -468,11 +470,11 @@ module m_boxmc_geometry
         iface = [1,-1,-1,-1,1]
         !crossing with bottom and top plane:
         if(pdir(3).ge.zero) then
-          call triangle_intersection(ploc, pdir, At, Bt, Ct, lhit(1), hit(1,:))
+          call triangle_intersection(ploc, pdir, At, Bt, Ct, rng, lhit(1), hit(1,:))
           lhit(5) = .False.
         endif
         if(pdir(3).le.zero) then
-          call triangle_intersection(ploc, pdir, Ab, Bb, Cb, lhit(5), hit(5,:))
+          call triangle_intersection(ploc, pdir, Ab, Bb, Cb, rng, lhit(5), hit(5,:))
           lhit(1) = .False.
         endif
 

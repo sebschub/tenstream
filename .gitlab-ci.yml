@@ -1,80 +1,82 @@
-.build_docker_img: &build_docker_img
+stages:
+  - build
+
+.template_build_PETSC: &template_build_PETSC
+    - export PETSC_DIR=$CI_PROJECT_DIR/$PETSC_DIR
+    - echo "Installing Petsc in ${PETSC_DIR}/${PETSC_ARCH}"
+    - git clone -q --depth=1 https://gitlab.com/petsc/petsc.git $PETSC_DIR
+    - cd $PETSC_DIR
+    - >
+      CMD="./configure
+      --with-fortran
+      --with-fortran-interfaces
+      --with-precision=$PETSC_PRECISION
+      --with-64-bit-indices=$PETSC_64_INTEGERS
+      --with-debugging=$PETSC_DEBUGGING"
+    - echo $CMD && $CMD && make PETSC_DIR=$PETSC_DIR PETSC_ARCH=$PETSC_ARCH all
+    - cd $CI_PROJECT_DIR
+
+# Build Stage
+.build:default:
   stage: build
   script:
-    - echo '(Re-)Generating Dockerfile Images for' $CC $BUILD_TYPE $DOCKERFILE
-    - export WORKDIR=/root
-    - docker/build_dockerfile.sh "docker/Dockerfile.$DOCKERFILE" "$BUILD_TYPE" "$WORKDIR" "$CC" "$FC" "$CXX" mydockerfile && cat mydockerfile
-    - export myHASH=$( echo ${DOCKERFILE}_$(md5sum mydockerfile|cut -f 1 -d ' ') | tr '[:upper:]' '[:lower:]')
-    - echo "Docker Image Tag" $myHASH
-    - podman build -f mydockerfile -t $myHASH
-    - mkdir -p $LUTTMP && pushd $LUTTMP
-    - wget -q -cN -r -l 1 -nd -nH -A 'LUT*.mmap4' https://www.meteo.physik.uni-muenchen.de/~Fabian.Jakub/TenstreamLUT/
-    - popd
-    - podman run -v $(pwd):$WORKDIR/tenstream -v $LUTTMP:$WORKDIR/TenstreamLUT --rm -e BUILD_TYPE -e CC -e FC -e CXX -e WORKDIR -e SYST -t $myHASH $WORKDIR/tenstream/docker/build_and_run_tenstream_tests.sh
-
-
-build_ubuntu_latest_noMPI_GCC_DEBUG:
-  <<: *build_docker_img
+    - if [ ! -z "$MODULES" ]; then module load $MODULES || exit 1; module list; fi
+    - mkdir -p build && cd build
+    - cmake .. -DCMAKE_BUILD_TYPE="$BUILD_TYPE" -DCTEST_MPIRUN_FLAGS="$MPIRUN_FLAGS" -DMPIEXEC="$MPIEXEC" || exit 1
+    - make all -j || exit 2
+    - CMD="ctest $CTEST_ARGS"
+    - echo $CMD && $CMD || exit 3
   variables:
-    CC: "mpicc"
-    FC: "mpif90"
-    CXX: "mpicxx"
-    BUILD_TYPE: "DEBUG"
-    DOCKERFILE: "ubuntu_latest_noMPI"
-    SYST: "ubuntu"
-    LUTTMP: "/local/gitlabCI_TenstreamLUT"
+    CTEST_ARGS: "-E 'boxmc|LUT'"
+    BUILD_TYPE: RELEASE
+    MPIEXEC: "mpirun"
+    MPIRUN_FLAGS: '' #--allow-run-as-root;-A;bm0974;-p;shared
+    MODULES: ''
 
-build_ubuntu_latest_GCC_DEBUG:
-  <<: *build_docker_img
+build:docker:ubuntu-rolling:
+  extends: .build:default
+  image: ubuntu:rolling
+  before_script:
+    - apt-get -qq update && apt-get -qq install -fy build-essential cmake gfortran git libhdf5-mpi-dev libnetcdf-dev libnetcdff-dev libopenblas-dev libopenmpi-dev m4 openmpi-bin python wget
+    - *template_build_PETSC
+  tags:
+    - docker.meteo.physik.lmu.de
   variables:
-    CC: "mpicc"
-    FC: "mpif90"
-    CXX: "mpicxx"
-    BUILD_TYPE: "DEBUG"
-    DOCKERFILE: "ubuntu_latest"
-    SYST: "ubuntu"
-    LUTTMP: "/local/gitlabCI_TenstreamLUT"
+    CTEST_ARGS: '-E boxmc|LUT|pfunit_test_pprts_symmetry|pfunit_test_rrtm_lw_Bsrfc|pfunit_test_rrtm_lw_sw'
+    MPIRUN_FLAGS: "--allow-run-as-root;--oversubscribe"
+    PETSC_DIR: petsc
+    PETSC_ARCH: default
+    PETSC_PRECISION: double
+    PETSC_64_INTEGERS: 0
+    PETSC_DEBUGGING: 1
+    BUILD_TYPE: DEBUG
 
-build_ubuntu_rolling_GCC_DEBUG:
-  <<: *build_docker_img
+# MIM runs
+.build:mim:default:
+  extends: .build:default
+  before_script:
+    - mkdir -p $CI_PROJECT_DIR/LUT; cp -rsn /project/meteo/homepages/Fabian.Jakub/TenstreamLUT/* $CI_PROJECT_DIR/LUT/
+  tags:
+    - slurm.meteo.physik.lmu.de
   variables:
-    CC: "mpicc"
-    FC: "mpif90"
-    CXX: "mpicxx"
-    BUILD_TYPE: "DEBUG"
-    DOCKERFILE: "ubuntu_rolling"
-    SYST: "ubuntu"
-    LUTTMP: "/local/gitlabCI_TenstreamLUT"
+    LUT_BASENAME: "$CI_PROJECT_DIR/LUT/LUT"
+    SRUN_OPTIONS: "--time 02:00:00 --mem 4G -n 9"
+    MPIEXEC: "srun"
+    CTEST_ARGS: '-E boxmc|LUT'
 
-build_ubuntu_rolling_GCC_DEBUG_int64:
-  <<: *build_docker_img
+.build:mim:icc:single:
+  extends: .build:mim:default
   variables:
-    CC: "mpicc"
-    FC: "mpif90"
-    CXX: "mpicxx"
-    BUILD_TYPE: "DEBUG_int64"
-    DOCKERFILE: "ubuntu_rolling"
-    SYST: "ubuntu"
-    LUTTMP: "/local/gitlabCI_TenstreamLUT"
+    MODULES: "petsc/single-icc-19 netcdf/4.7.0-icc-19"
+    SRUN_OPTIONS: "--time 02:00:00 --mem 8G -n 9"
 
-build_ubuntu_rolling_GCC_DEBUG_single:
-  <<: *build_docker_img
+build:mim:gcc:single:
+  extends: .build:mim:default
   variables:
-    CC: "mpicc"
-    FC: "mpif90"
-    CXX: "mpicxx"
-    BUILD_TYPE: "DEBUG_single"
-    DOCKERFILE: "ubuntu_rolling"
-    SYST: "ubuntu"
-    LUTTMP: "/local/gitlabCI_TenstreamLUT"
+    MODULES: "petsc/single-gcc-9 netcdf/4.7.0-gcc-9"
 
-build_ubuntu_rolling_GCC_RELEASE_single_int64:
-  <<: *build_docker_img
+build:mim:gcc:debug:
+  extends: .build:mim:default
   variables:
-    CC: "mpicc"
-    FC: "mpif90"
-    CXX: "mpicxx"
-    BUILD_TYPE: "RELEASE_single_int64"
-    DOCKERFILE: "ubuntu_rolling"
-    SYST: "ubuntu"
-    LUTTMP: "/local/gitlabCI_TenstreamLUT"
+    MODULES: "petsc/debug-gcc-9 netcdf/4.7.0-gcc-9"
+    BUILD_TYPE: DEBUG

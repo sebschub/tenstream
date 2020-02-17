@@ -1,10 +1,9 @@
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/config)
 
+set (NETCDF_DIR     "" CACHE PATH "default netcdf  path")
+set (NETCDF_DIR_F90 "" CACHE PATH "default netcdff path")
 #Load system specific settings
-if (NOT SYST)
-  set (SYST default CACHE STRING
-      "Choose the location: mpipc thunder fedora archlinux supermuc jugene" FORCE )
-endif ()
+set (SYST default CACHE STRING "Location specific settings from config/<SYST>.cmake files")
 include (${SYST} OPTIONAL)
 
 # Add our custom cmake find scripts
@@ -71,10 +70,10 @@ if(NOT ENABLE_PGO STREQUAL "OFF")
 endif()
 add_custom_target(pgobuild
   COMMAND ${CMAKE_COMMAND} ${CMAKE_BINARY_DIR} -DENABLE_PGO=GENERATE
-  COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} -j --
+  COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --
   COMMAND ${CMAKE_CTEST_COMMAND} -E 'boxmc|LUT' -R 'pprts|plexrt'
   COMMAND ${CMAKE_COMMAND} ${CMAKE_BINARY_DIR} -DENABLE_PGO=USE
-  COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} -j --
+  COMMAND ${CMAKE_COMMAND} --build ${CMAKE_BINARY_DIR} --
   )
 
 MESSAGE(STATUS "Build Type " ${CMAKE_BUILD_TYPE})
@@ -89,11 +88,50 @@ else()
 endif()
 
 
+## Set MPI Stuff
+option(AUTODETECT_MPI "Let CMAKE try to find MPI variables" ON)
+set(MPIEXEC mpirun CACHE STRING "Command to run MPI programs, e.g. used to run tests")
+if(DEFINED USER_MPIEXEC)
+  set(MPIEXEC ${USER_MPIEXEC})
+endif()
+set(MPIEXEC_NUMPROC_FLAG -n CACHE STRING "options to set number of MPI tasks/nodes")
+if(AUTODETECT_MPI)
+  find_package( MPI REQUIRED )
+  if(${MPI_Fortran_FOUND})
+    add_definitions(${MPI_Fortran_COMPILE_FLAGS})
+    include_directories(${MPI_Fortran_INCLUDE_PATH})
+    link_directories(${MPI_Fortran_LIBRARIES})
+    list (APPEND EXTLIB "${MPI_Fortran_LIBRARIES}" )
+    add_definitions(${MPI_C_COMPILE_FLAGS})
+    include_directories(${MPI_C_INCLUDE_PATH})
+    list (APPEND EXTLIB "${MPI_C_LIBRARIES}" )
+    include_directories(${ITAPS_INCLUDES})
+  else(${MPI_Fortran_FOUND})
+    message(WARNING "!!!!!!! MPI MISSING")
+  endif(${MPI_Fortran_FOUND})
+else(AUTODETECT_MPI)
+endif(AUTODETECT_MPI)
+
+
+# HDF5
+find_package( HDF5 REQUIRED ) # use this for non-cmake install of HDF5
+message(STATUS "Found HDF5    : ${HDF5_FOUND}" )
+if(${HDF5_FOUND})
+  message(STATUS "HDF5  Includes: ${HDF5_INCLUDE_DIR}" )
+  message(STATUS "HDF5 F90      : ${HDF5_BUILD_FORTRAN}" )
+  message(STATUS "HDF5 Library  : ${HDF5_LIBRARIES}")
+  include_directories(${HDF5_INCLUDE_DIR})
+  include_directories(${HDF5_FORTRAN_INCLUDE_DIR})
+  list (APPEND EXTLIB ${HDF5_LIBRARIES})
+else(${HDF5_FOUND})
+  message(WARNING "CMake could not find your HDF5 install, you may need to add the hdf5 libraries in config/<loc>.cmake by hand." )
+endif(${HDF5_FOUND})
+
 # NetCDF
 set (NETCDF_F90 "YES")
-find_package( NetCDF )
+find_package( NetCDF REQUIRED)
 if(${NETCDF_FOUND})
-  message(STATUS "Found NetCDF:    ${NETCDF_FOUND}" )
+  message(STATUS "Found NetCDF:     ${NETCDF_FOUND}" )
   message(STATUS "NetCDF  Includes: ${NETCDF_INCLUDES}" )
   message(STATUS "NetCDFF Includes: ${NETCDF_INCLUDES_F90}" )
   message(STATUS "NetCDF  Library : ${NETCDF_LIBRARIES}")
@@ -141,43 +179,6 @@ if(${LAPACK_FOUND})
   list (APPEND EXTLIB "${LAPACK_LIBRARIES}")
 endif(${LAPACK_FOUND})
 
-# HDF5
-# find_package( HDF5 ) # use this for non-cmake install of HDF5
-# message(STATUS "Found HDF5    : ${HDF5_FOUND}" )
-# if(${HDF5_FOUND})
-#   message(STATUS "HDF5  Includes: ${HDF5_INCLUDE_DIR}" )
-#   message(STATUS "HDF5 F90      : ${HDF5_BUILD_FORTRAN}" )
-#   message(STATUS "HDF5 Library  : ${HDF5_LIBRARIES}")
-#   include_directories(${HDF5_INCLUDE_DIR})
-#   include_directories(${HDF5_FORTRAN_INCLUDE_DIR})
-#   list (APPEND EXTLIB ${HDF5_LIBRARIES})
-# else(${HDF5_FOUND})
-#   message(WARNING "CMake could not find your HDF5 install, you may need to add the hdf5 libraries in config/<loc>.cmake by hand." )
-# endif(${HDF5_FOUND})
-
-
-## Set MPI Stuff
-option(AUTODETECT_MPI "Let CMAKE try to find MPI variables" OFF)
-set(MPIEXEC mpirun CACHE STRING "Command to run MPI programs, e.g. used to run tests")
-if(DEFINED USER_MPIEXEC)
-  set(MPIEXEC ${USER_MPIEXEC})
-endif()
-set(MPIEXEC_NUMPROC_FLAG -n CACHE STRING "options to set number of MPI tasks/nodes")
-if(AUTODETECT_MPI)
-  find_package( MPI REQUIRED )
-  if(${MPI_Fortran_FOUND})
-    add_definitions(${MPI_Fortran_COMPILE_FLAGS})
-    include_directories(${MPI_Fortran_INCLUDE_PATH})
-    link_directories(${MPI_Fortran_LIBRARIES})
-    list (APPEND EXTLIB "${MPI_Fortran_LIBRARIES}" )
-    include_directories(${ITAPS_INCLUDES})
-    message(STATUS "+++++++ MPI FOUND")
-  else(${MPI_Fortran_FOUND})
-    message(WARNING "!!!!!!! MPI MISSING")
-  endif(${MPI_Fortran_FOUND})
-else(AUTODETECT_MPI)
-endif(AUTODETECT_MPI)
-
 
 ## Add User Libs
 if(DEFINED USER_LIBS)
@@ -199,6 +200,7 @@ install(DIRECTORY ${CMAKE_Fortran_MODULE_DIRECTORY}/ DESTINATION include)
 if (CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
   set (CMAKE_INSTALL_PREFIX "${CMAKE_BINARY_DIR}/install" CACHE PATH "default install path" FORCE )
 endif()
+install(DIRECTORY ${CMAKE_LIBRARY_OUTPUT_DIRECTORY}/ DESTINATION lib)
 
 # Find out if the compiler is XLF and if so give this to the C preprocessor
 string(COMPARE EQUAL ${CMAKE_Fortran_COMPILER_ID} "XL" _is_XLF)
@@ -248,21 +250,57 @@ if(ENABLE_PLEXRT)
   add_subdirectory (plexrt)
 endif(ENABLE_PLEXRT)
 
-# Documentation targets
-add_custom_target(doc DEPENDS doxygen)
+# Add Twostream Solvers of Nina
+add_subdirectory(twomax)
 
-# add a target to generate API documentation with Doxygen
-find_package(Doxygen)
-if(DOXYGEN_FOUND)
-  configure_file(${PROJECT_SOURCE_DIR}/doc/Doxyfile.in ${CMAKE_CURRENT_BINARY_DIR}/doc/Doxyfile @ONLY)
-  add_custom_target(doxygen
-    ${DOXYGEN_EXECUTABLE} ${CMAKE_CURRENT_BINARY_DIR}/doc/Doxyfile
-    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-    COMMENT "Generating API documentation with Doxygen" VERBATIM
-    )
-else(FOXYGEN_FOUND)
-  message(STATUS "Could not find Doxygen to create source code documentation")
-endif(DOXYGEN_FOUND)
+set(TENSTR_LIBS
+  pprts_base
+  pprts
+  f2c_twomax
+  tenstr_disort
+  f2c_rayli
+  )
+if(ENABLE_C_WRAPPER)
+  list(APPEND TENSTR_LIBS f2c_pprts f2c_pprts_rrtm)
+endif()
+if(ENABLE_PLEXRT)
+  list(APPEND TENSTR_LIBS plexrt )
+  if(ENABLE_RRTM)
+    list(APPEND TENSTR_LIBS plexrt_rrtmg )
+  endif()
+endif()
+if(ENABLE_RRTM)
+  list(APPEND TENSTR_LIBS pprts_rrtm_sw pprts_rrtm_lw pprts_rrtmg)
+endif()
+
+
+# Generate Master Library which contains all symbols
+if(NOT BUILD_SHARED_LIBS)
+	function(combine_archives output_archive list_of_input_archives)
+		set(mri_file ${CMAKE_BINARY_DIR}/${output_archive}.mri)
+		set(FULL_OUTPUT_PATH ${CMAKE_ARCHIVE_OUTPUT_DIRECTORY}/lib${output_archive}.a)
+		message(STATUS "Generating one lib to rule them all: ${FULL_OUTPUT_PATH} :: ${mri_file}")
+		file(WRITE ${mri_file} "create ${FULL_OUTPUT_PATH}\n")
+		FOREACH(in_archive ${list_of_input_archives})
+			message(STATUS "Adding static lib: ${in_archive}")
+			file(APPEND ${mri_file} "addlib ${CMAKE_ARCHIVE_OUTPUT_DIRECTORY}/lib${in_archive}.a\n")
+		ENDFOREACH()
+		file(APPEND ${mri_file} "save\n")
+		file(APPEND ${mri_file} "end\n")
+
+		set(output_archive_dummy_file ${CMAKE_BINARY_DIR}/${output_archive}.dummy.F90)
+		add_custom_command(OUTPUT ${output_archive_dummy_file}
+			COMMAND touch ${output_archive_dummy_file}
+			DEPENDS ${list_of_input_archives})
+
+		add_library(${output_archive} STATIC ${output_archive_dummy_file})
+		add_custom_command(TARGET ${output_archive}
+			POST_BUILD
+			COMMAND ${CMAKE_AR} -M < ${mri_file})
+	endfunction(combine_archives)
+
+	combine_archives(tenstream "${TENSTR_LIBS}")
+endif()
 
 # Add pfUnit for testing
 option(ENABLE_PFUNIT "Enable pfUnit testing Framework" OFF)
@@ -334,54 +372,18 @@ add_custom_target(distclean
   COMMENT "Deleting CMake files" VERBATIM
   )
 
-# Add Twostream Solvers of Nina
-add_subdirectory(twomax)
+# Documentation targets
+add_custom_target(doc DEPENDS doxygen)
 
-
-# Generate Master Library which contains all symbols
-if(NOT BUILD_SHARED_LIBS)
-	function(combine_archives output_archive list_of_input_archives)
-		set(mri_file ${CMAKE_BINARY_DIR}/${output_archive}.mri)
-		set(FULL_OUTPUT_PATH ${CMAKE_ARCHIVE_OUTPUT_DIRECTORY}/lib${output_archive}.a)
-		message(STATUS "Generating one lib to rule them all: ${FULL_OUTPUT_PATH} :: ${mri_file}")
-		file(WRITE ${mri_file} "create ${FULL_OUTPUT_PATH}\n")
-		FOREACH(in_archive ${list_of_input_archives})
-			message(STATUS "Adding static lib: ${in_archive}")
-			file(APPEND ${mri_file} "addlib ${CMAKE_ARCHIVE_OUTPUT_DIRECTORY}/lib${in_archive}.a\n")
-		ENDFOREACH()
-		file(APPEND ${mri_file} "save\n")
-		file(APPEND ${mri_file} "end\n")
-
-		set(output_archive_dummy_file ${CMAKE_BINARY_DIR}/${output_archive}.dummy.F90)
-		add_custom_command(OUTPUT ${output_archive_dummy_file}
-			COMMAND touch ${output_archive_dummy_file}
-			DEPENDS ${list_of_input_archives})
-
-		add_library(${output_archive} STATIC ${output_archive_dummy_file})
-		add_custom_command(TARGET ${output_archive}
-			POST_BUILD
-			COMMAND ${CMAKE_AR} -M < ${mri_file})
-	endfunction(combine_archives)
-
-	set(TENSTR_LIBS
-		pprts_base
-		pprts
-		f2c_twomax
-		tenstr_disort
-    f2c_rayli
-		)
-	if(ENABLE_C_WRAPPER)
-		list(APPEND TENSTR_LIBS f2c_pprts f2c_pprts_rrtm)
-	endif()
-	if(ENABLE_PLEXRT)
-		list(APPEND TENSTR_LIBS plexrt )
-		if(ENABLE_RRTM)
-			list(APPEND TENSTR_LIBS plexrt_rrtmg )
-		endif()
-	endif()
-	if(ENABLE_RRTM)
-		list(APPEND TENSTR_LIBS pprts_rrtm_sw pprts_rrtm_lw pprts_rrtmg)
-	endif()
-
-	combine_archives(tenstream "${TENSTR_LIBS}")
-endif()
+# add a target to generate API documentation with Doxygen
+find_package(Doxygen)
+if(DOXYGEN_FOUND)
+  configure_file(${PROJECT_SOURCE_DIR}/doc/Doxyfile.in ${CMAKE_CURRENT_BINARY_DIR}/doc/Doxyfile @ONLY)
+  add_custom_target(doxygen
+    ${DOXYGEN_EXECUTABLE} ${CMAKE_CURRENT_BINARY_DIR}/doc/Doxyfile
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+    COMMENT "Generating API documentation with Doxygen" VERBATIM
+    )
+else(FOXYGEN_FOUND)
+  message(STATUS "Could not find Doxygen to create source code documentation")
+endif(DOXYGEN_FOUND)

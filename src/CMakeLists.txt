@@ -50,7 +50,6 @@ set( general_sources
   "helper_functions_dp.F90"
   "c_syscall_wrappers.F90"
   "c_syscall_constants.c"
-  "netcdfio.F90"
   "data_parameters.F90"
   "eddington.F90"
   "interpolation.F90"
@@ -97,6 +96,4 @@ foreach ( stream ${streams} )
 
   add_executable("${basename}" "${basename}${fnameext}" )
   target_link_libraries( "${basename}" pprts_base)
-
-  install(TARGETS ${basename} RUNTIME DESTINATION bin)
 endforeach ()

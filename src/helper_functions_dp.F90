@@ -34,7 +34,8 @@ module m_helper_functions_dp
           rotation_matrix_local_basis_to_world, pnt_in_cube
 
       interface imp_bcast
-        module procedure imp_bcast_real_1d,imp_bcast_real_2d,imp_bcast_real_3d,imp_bcast_real_5d,imp_bcast_int_1d,imp_bcast_int_2d,imp_bcast_int,imp_bcast_real,imp_bcast_logical
+        module procedure imp_bcast_real_1d,imp_bcast_real_2d,imp_bcast_real_3d,imp_bcast_real_5d,&
+                imp_bcast_int_1d,imp_bcast_int_2d,imp_bcast_int,imp_bcast_real,imp_bcast_logical
       end interface
       interface swap
         module procedure swap_iintegers, swap_ireal_dp
@@ -348,14 +349,15 @@ module m_helper_functions_dp
       integer(iintegers), intent(out) :: iface
       logical :: lhit1, lhit2
       real(ireal_dp) :: hit1(4), hit2(4)
+      real(ireal_dp),parameter :: rng(2) = [0._ireal_dp, huge(rng)]
 
       lhit = .False.
       hit = huge(hit)
       iface = -1
 
       ! 2 Triangles incorporating, cut along (AC)
-      call triangle_intersection(origin, direction, tA, tB, tC, lhit1, hit1)
-      call triangle_intersection(origin, direction, tA, tC, tD, lhit2, hit2)
+      call triangle_intersection(origin, direction, tA, tB, tC, rng, lhit1, hit1)
+      call triangle_intersection(origin, direction, tA, tC, tD, rng, lhit2, hit2)
       if(lhit1) then
         lhit = lhit1
         hit = hit1
@@ -369,12 +371,12 @@ module m_helper_functions_dp
     end subroutine
 
     ! Watertight ray -> triangle intersection code from http://jcgt.org/published/0002/01/05/
-    subroutine triangle_intersection(origin, direction, tA, tB, tC, lhit, hit)
-      real(ireal_dp), intent(in) :: origin(:), direction(:), tA(:), tB(:), tC(:)
+    subroutine triangle_intersection(origin, direction, tA, tB, tC, rng, lhit, hit)
+      real(ireal_dp), intent(in) :: origin(:), direction(:), tA(:), tB(:), tC(:), rng(:)
       logical, intent(out) :: lhit
       real(ireal_dp), intent(out) :: hit(:)
 
-      logical, parameter :: ldebug = .False. , BACKFACE_CULLING=.False., HIT_EDGE=.True.
+      logical, parameter :: ldebug=.False., BACKFACE_CULLING=.False., HIT_EDGE=.True.
 
       real(ireal_dp) :: org(0:2), dir(0:2), A(0:2), B(0:2), C(0:2)
       integer(iintegers) :: kx, ky, kz
@@ -468,6 +470,11 @@ module m_helper_functions_dp
 
       ! calculate determinant
       det = U + V + W
+      if(det.eq.0) then
+        lhit = .False.
+        hit(:) = huge(one)
+        return
+      endif
       if (.not.HIT_EDGE .and. approx(det, zero)) then
         if(ldebug) print *,'determinant zero: on edge?', det
         lhit=.False.
@@ -478,40 +485,18 @@ module m_helper_functions_dp
       Bz = Sz * B(kz)
       Cz = Sz * C(kz)
       T = U * Az + V * Bz + W * Cz
+      rcpDet = one / det
+      hit(4) = T * rcpDet
 
-      if(BACKFACE_CULLING) then
-        if (T < zero .or. T > hit(4) * det) then
-          if(ldebug) print *,'BACKFACE_CULLING T<0', T
-          lhit = .False.
-        endif
-      else
-        if(hit(4).ge.huge(hit)) then
-          dist_times_det = sign(huge(det), det)
-        else
-          dist_times_det = hit(4)*det
-        endif
-        if(det < zero .and. ((T >= zero) .or. (T < dist_times_det))) then
-          if(ldebug) print *,'det<0 && T>0', det, T
-          lhit = .False.
-        else if(det > zero .and. ((T <= zero) .or. (T > dist_times_det))) then
-          if(ldebug) print *,'det>0 && T<0', det, T
-          lhit = .False.
-        endif
-      endif
-      if(approx(det,zero,tiny(det))) then
-        lhit = .False.
-        hit(:) = huge(one)
-        return
-      endif
+      if(hit(4).lt.rng(1)) lhit = .False.
+      if(hit(4).gt.rng(2)) lhit = .False.
 
       ! normalize U, V, W, and T
-      rcpDet = one / det
       b0 = U * rcpDet
       b1 = V * rcpDet
       b2 = W * rcpDet
 
       hit(1:3) = b0*tA + b1*tB + b2*tC
-      hit(4) = T * rcpDet
       if(ldebug) print *,'Hit triangle', lhit, '::', hit
     end subroutine
 
@@ -576,8 +561,10 @@ module m_helper_functions_dp
         if(ldebug) print *,'pnt_in_triangle::pnt in rectangle:', p1, p2, p3, 'p', p, '::', pnt_in_triangle
         if (.not.pnt_in_triangle) then ! if pnt is not in rectangle, it is not in triangle!
           ! Then check for sides
-          a = ((p2(2)- p3(2))*(p(1) - p3(1)) + (p3(1) - p2(1))*(p(2) - p3(2))) / ((p2(2) - p3(2))*(p1(1) - p3(1)) + (p3(1) - p2(1))*(p1(2) - p3(2)))
-          b = ((p3(2) - p1(2))*(p(1) - p3(1)) + (p1(1) - p3(1))*(p(2) - p3(2))) / ((p2(2) - p3(2))*(p1(1) - p3(1)) + (p3(1) - p2(1))*(p1(2) - p3(2)))
+          a = ((p2(2)- p3(2))*(p(1) - p3(1)) + (p3(1) - p2(1))*(p(2) - p3(2))) / &
+            ((p2(2) - p3(2))*(p1(1) - p3(1)) + (p3(1) - p2(1))*(p1(2) - p3(2)))
+          b = ((p3(2) - p1(2))*(p(1) - p3(1)) + (p1(1) - p3(1))*(p(2) - p3(2))) / &
+            ((p2(2) - p3(2))*(p1(1) - p3(1)) + (p3(1) - p2(1))*(p1(2) - p3(2)))
           c = one - (a + b)
 
           pnt_in_triangle = all([a,b,c].ge.zero)
