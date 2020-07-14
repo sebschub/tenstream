@@ -598,7 +598,9 @@ subroutine createLUT(OPP, comm, config, S, T)
         real(irealLUT),allocatable, dimension(:,:) :: S_diff, T_dir, S_tol, T_tol
 
         real :: starttime, lastsavetime, now
-        call cpu_time(starttime)
+        integer :: clock_count, clock_count_rate
+        call system_clock(clock_count, clock_count_rate)
+        starttime = clock_count / clock_count_rate
         lastsavetime = starttime
 
         finalizedworkers=0
@@ -709,7 +711,8 @@ subroutine createLUT(OPP, comm, config, S, T)
                 print *,'Calculated LUT...', lutindex, &
                         real(lutindex-1, irealLUT)*100._irealLUT/real(total_size, irealLUT),'%'
 
-              call cpu_time(now)
+              call system_clock(clock_count, clock_count_rate)
+              now = clock_count / clock_count_rate
               if( (now-lastsavetime).gt.LUT_dump_interval .or. (now-starttime).gt.LUT_max_create_jobtime ) then !every 30 minutes wall clock time, dump the LUT.
                 print *,'Dumping LUT after ',(now-lastsavetime)/60,'minutes'
                 if(present(T)) then
@@ -878,7 +881,7 @@ subroutine prepare_table_space(OPP, config, S, T)
     if(.not.allocated (S%stddev_tol)) allocate(S%stddev_tol(product(config%dims(:)%N)), source=huge(-1._irealLUT))
     if(.not.allocated (T%stddev_tol)) allocate(T%stddev_tol(product(config%dims(:)%N)), source=huge(-1._irealLUT))
   else
-    if(.not.associated(S%c)) allocate(S%c(OPP%diff_streams**2, product(config%dims(:)%N)))
+    if(.not.associated(S%c)) allocate(S%c(OPP%diff_streams**2, product(config%dims(:)%N)), source=-1._irealLUT)
     if(.not.allocated (S%stddev_tol)) allocate(S%stddev_tol(product(config%dims(:)%N)), source=huge(-1._irealLUT))
   endif
   print *,'Allocating Space for LUTs '//itoa(entries)// &
@@ -1723,7 +1726,8 @@ end subroutine
     ierr = 0
     do kdim = 1,size(sample_pts)
       if(sample_pts(kdim).lt.config%dims(kdim)%vrange(1).or.sample_pts(kdim).gt.config%dims(kdim)%vrange(2)) then
-        print *,'ERROR value in dimension '//itoa(kdim)//' is outside of LUT range', &
+        print *,'ERROR value in dimension '//trim(config%dims(kdim)%dimname)// &
+                ' ('//itoa(kdim)//') is outside of LUT range', &
                 sample_pts(kdim), 'not in:', config%dims(kdim)%vrange
         ierr = ierr +1
       endif

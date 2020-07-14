@@ -9,7 +9,8 @@ module m_plex_rt
     angle_between_two_vec, rad2deg, deg2rad, strF2C, get_arg, meanval, &
     vec_proj_on_plane, cross_3d, rotation_matrix_world_to_local_basis, &
     approx, swap, delta_scale, delta_scale_optprop, itoa, ftoa, cstr, &
-    imp_reduce_mean, imp_min_mean_max, rotation_matrix_around_axis_vec
+    imp_reduce_mean, imp_min_mean_max, rotation_matrix_around_axis_vec, &
+    mpi_logical_all_same
 
   use m_data_parameters, only : ireals, iintegers, mpiint, irealLUT, imp_ireals, &
     i0, i1, i2, i3, i4, i5, i6, i7, i8, default_str_len, &
@@ -53,8 +54,7 @@ module m_plex_rt
     compute_face_geometry, set_plex_rt_optprop, destroy_plexrt_solver, &
     plexrt_get_result, scale_flx
 
-  !logical, parameter :: ldebug=.False.
-  logical, parameter :: ldebug=.True.
+  logical, parameter :: ldebug=.False.
 
   contains
     subroutine init_plex_rt_solver(plex, solver)
@@ -304,11 +304,12 @@ module m_plex_rt
       end subroutine
     end subroutine
 
-    subroutine set_plex_rt_optprop(solver, vlwc, viwc, vert_integrated_kabs, vert_integrated_ksca)
+    subroutine set_plex_rt_optprop(solver, vlwc, viwc, vert_integrated_kabs, vert_integrated_ksca, lverbose)
       use m_helper_functions, only : delta_scale
       class(t_plex_solver), allocatable, intent(inout) :: solver
       type(tVec),intent(in), optional :: vlwc, viwc
       real(ireals), optional :: vert_integrated_kabs, vert_integrated_ksca
+      logical, intent(in), optional :: lverbose
       real(ireals), pointer :: xlwc(:), xiwc(:)
       real(ireals), pointer :: xkabs(:), xksca(:), xg(:)
 
@@ -407,9 +408,11 @@ module m_plex_rt
         call VecRestoreArrayReadF90(viwc, xiwc, ierr); call CHKERR(ierr)
       endif
 
-      print *,'Min/Max of kabs', minval(xkabs), maxval(xkabs)
-      print *,'Min/Max of ksca', minval(xksca), maxval(xksca)
-      print *,'Min/Max of g   ', minval(xg   ), maxval(xg   )
+      if(get_arg(.False., lverbose)) then
+        print *,'Min/Max of kabs', minval(xkabs), maxval(xkabs)
+        print *,'Min/Max of ksca', minval(xksca), maxval(xksca)
+        print *,'Min/Max of g   ', minval(xg   ), maxval(xg   )
+      endif
 
       call VecRestoreArrayF90(solver%kabs, xkabs, ierr); call CHKERR(ierr)
       call VecRestoreArrayF90(solver%ksca, xksca, ierr); call CHKERR(ierr)
@@ -521,28 +524,12 @@ module m_plex_rt
       real(ireals), save :: last_sundir(3) = [zero,zero,zero]
       logical :: luse_rayli, lvacuum_domain_boundary, luse_disort, lflg
 
-      if(.not.allocated(solver)) call CHKERR(1_mpiint, 'run_plex_rt_solver::solver has to be allocated')
+      call check_input_arguments()
 
-      if(.not.allocated(solver%plex)) call CHKERR(1_mpiint, 'run_plex_rt_solver::plex has to be allocated first')
       call mpi_comm_rank(solver%plex%comm, myid, ierr); call CHKERR(ierr)
 
-      if(.not.allocated(solver%plex%geom_dm)) call CHKERR(1_mpiint, 'geom_dm has to be allocated first')
-      if(.not.allocated(solver%plex%srfc_boundary_dm)) call CHKERR(1_mpiint, 'srfc_boundary_dm has to be allocated first')
-      if(.not.allocated(solver%kabs  )) call CHKERR(1_mpiint, 'kabs   has to be allocated first')
-      if(.not.allocated(solver%ksca  )) call CHKERR(1_mpiint, 'ksca   has to be allocated first')
-      if(.not.allocated(solver%g     )) call CHKERR(1_mpiint, 'g      has to be allocated first')
-      if(.not.allocated(solver%albedo)) call CHKERR(1_mpiint, 'albedo has to be allocated first')
-      if(lthermal) then
-        if(.not.allocated(solver%plck)) call CHKERR(1_mpiint, 'planck radiation vec has to be allocated first')
-      endif
-
-      if(.not.allocated(solver%plex%geom_dm))  call compute_face_geometry(solver%plex, solver%plex%geom_dm)
-      if(.not.allocated(solver%plex%edir_dm))  &
-        call CHKERR(1_mpiint, 'solver%plex%edir_dm not allocated, should have happened in init_solver?')
-      if(.not.allocated(solver%plex%ediff_dm)) &
-        call CHKERR(1_mpiint, 'solver%plex%ediff_dm not allocated, should have happened in init_solver?')
-      if(.not.allocated(solver%plex%abso_dm))  &
-        call CHKERR(1_mpiint, 'solver%plex%abso_dm not allocated, should have happened in init_solver?')
+      if(.not.allocated(solver%plex%geom_dm))  &
+        call compute_face_geometry(solver%plex, solver%plex%geom_dm)
 
       if(.not.allocated(solver%IS_diff_in_out_dof)) &
         call setup_IS_diff_in_out_dof(solver%plex, solver%plex%ediff_dm, solver%IS_diff_in_out_dof)
@@ -646,8 +633,13 @@ module m_plex_rt
           call PetscLogEventEnd(solver%logs%setup_dir_src, ierr)
 
           ! Output of srcVec
-          if(ldebug) &
+          if(ldebug) then
+            call scale_flx(solver, solver%plex, &
+              solver%dir_scalevec_Wm2_to_W, solver%dir_scalevec_W_to_Wm2, &
+              solver%diff_scalevec_Wm2_to_W, solver%diff_scalevec_W_to_Wm2, &
+              solution, lWm2=.False., logevent=solver%logs%scale_flx)
             call debug_dump_vec(solver%plex%edir_dm, solver%dirsrc, solver%dir_scalevec_W_to_Wm2)
+          endif
 
           ! Create Direct Matrix
           call PetscLogEventBegin(solver%logs%setup_Mdir, ierr)
@@ -658,8 +650,14 @@ module m_plex_rt
 
           ! Solve Direct Matrix
           call PetscLogEventBegin(solver%logs%solve_Mdir, ierr)
-          call solve_plex_rt(solver%plex%edir_dm, solver%dirsrc, solver%Mdir, solver%ksp_solar_dir, solution%edir, &
-            ksp_residual_history=solution%dir_ksp_residual_history, prefix='solar_dir_')
+          call solve_plex_rt(solver%plex%edir_dm, &
+            solver%dirsrc, &
+            solver%Mdir, &
+            solver%ksp_solar_dir, &
+            solution%edir, &
+            ksp_residual_history=solution%dir_ksp_residual_history, &
+            prefix='solar_dir_', &
+            ksp_iter=solution%Niter_dir)
           call PetscLogEventEnd(solver%logs%solve_Mdir, ierr)
           call PetscObjectSetName(solution%edir, 'edir', ierr); call CHKERR(ierr)
           call PetscObjectViewFromOptions(solution%edir, PETSC_NULL_VEC, &
@@ -668,8 +666,13 @@ module m_plex_rt
           solution%lchanged = .True.
 
           ! Output of Edir Vec
-          if(ldebug) &
+          if(ldebug) then
+            call scale_flx(solver, solver%plex, &
+              solver%dir_scalevec_Wm2_to_W, solver%dir_scalevec_W_to_Wm2, &
+              solver%diff_scalevec_Wm2_to_W, solver%diff_scalevec_W_to_Wm2, &
+              solution, lWm2=.False., logevent=solver%logs%scale_flx)
             call debug_dump_vec(solver%plex%edir_dm, solution%edir, solver%dir_scalevec_W_to_Wm2)
+          endif
 
           call PetscLogEventEnd(solver%logs%compute_Edir, ierr)
         endif
@@ -700,11 +703,23 @@ module m_plex_rt
         ! Solve Diffuse Matrix
         call PetscLogEventBegin(solver%logs%solve_Mdiff, ierr)
         if(solution%lsolar_rad) then
-          call solve_plex_rt(solver%plex%ediff_dm, solver%diffsrc, solver%Mdiff, solver%ksp_solar_diff, solution%ediff, &
-            ksp_residual_history=solution%diff_ksp_residual_history, prefix='solar_diff_')
+          call solve_plex_rt(solver%plex%ediff_dm, &
+            solver%diffsrc, &
+            solver%Mdiff, &
+            solver%ksp_solar_diff, &
+            solution%ediff, &
+            ksp_residual_history=solution%diff_ksp_residual_history, &
+            prefix='solar_diff_', &
+            ksp_iter=solution%Niter_diff)
         else
-          call solve_plex_rt(solver%plex%ediff_dm, solver%diffsrc, solver%Mdiff, solver%ksp_thermal_diff, solution%ediff, &
-            ksp_residual_history=solution%diff_ksp_residual_history, prefix='thermal_diff_')
+          call solve_plex_rt(solver%plex%ediff_dm, &
+            solver%diffsrc, &
+            solver%Mdiff, &
+            solver%ksp_thermal_diff, &
+            solution%ediff, &
+            ksp_residual_history=solution%diff_ksp_residual_history, &
+            prefix='thermal_diff_', &
+            ksp_iter=solution%Niter_diff)
         endif
         call PetscLogEventEnd(solver%logs%solve_Mdiff, ierr)
         call PetscObjectSetName(solution%ediff, 'ediff', ierr); call CHKERR(ierr)
@@ -715,6 +730,10 @@ module m_plex_rt
 
         call PetscLogEventEnd(solver%logs%compute_Ediff, ierr)
 
+        ! Output of Diffuse Vec
+        if(ldebug) &
+          call debug_dump_vec(solver%plex%ediff_dm, solution%ediff, solver%diff_scalevec_W_to_Wm2)
+
         99 continue ! this is the quick exit final call where we clean up before the end of the routine
 
         ! Bring solution into a coherent state, i.e. update absorption etc.
@@ -723,6 +742,53 @@ module m_plex_rt
       end associate
 
       contains
+        subroutine check_input_arguments()
+          real(ireals) :: minmax(2)
+          integer(iintegers) :: k
+          integer(mpiint) :: comm, myid, ierr
+          if(.not.allocated(solver)) call CHKERR(1_mpiint, 'run_plex_rt_solver::solver has to be allocated')
+          if(.not.allocated(solver%plex)) call CHKERR(1_mpiint, 'run_plex_rt_solver::plex has to be allocated first')
+
+          if(ldebug) then
+            comm = solver%plex%comm
+            call MPI_Comm_rank( comm, myid, ierr); call CHKERR(ierr)
+
+            if(.not.mpi_logical_all_same(comm, lthermal)) &
+              call CHKERR(1_mpiint, 'argument lthermal has to be the same on all processes')
+            if(.not.mpi_logical_all_same(comm, lsolar)) &
+              call CHKERR(1_mpiint, 'argument lsolar has to be the same on all processes')
+
+            do k=1,3
+              call mpi_reduce(sundir(k), minmax(1), 1_mpiint, imp_ireals, MPI_MIN, 0_mpiint, comm, ierr); call CHKERR(ierr)
+              call mpi_reduce(sundir(k), minmax(2), 1_mpiint, imp_ireals, MPI_MAX, 0_mpiint, comm, ierr); call CHKERR(ierr)
+              if(myid.eq.0 .and. .not.approx(minmax(1), minmax(2))) &
+                call CHKERR(1_mpiint, 'run_plex_rt_solver::sundir('//itoa(k)//')'// &
+                                      ' is not the same on all processes!'// &
+                                      ' min/max: '//ftoa(minmax))
+            enddo
+          endif
+
+          if(.not.allocated(solver%plex%geom_dm)) &
+            call CHKERR(1_mpiint, 'geom_dm has to be allocated first')
+          if(.not.allocated(solver%plex%srfc_boundary_dm)) &
+            call CHKERR(1_mpiint, 'srfc_boundary_dm has to be allocated first')
+
+          if(.not.allocated(solver%kabs  )) call CHKERR(1_mpiint, 'kabs   has to be allocated first')
+          if(.not.allocated(solver%ksca  )) call CHKERR(1_mpiint, 'ksca   has to be allocated first')
+          if(.not.allocated(solver%g     )) call CHKERR(1_mpiint, 'g      has to be allocated first')
+          if(.not.allocated(solver%albedo)) call CHKERR(1_mpiint, 'albedo has to be allocated first')
+
+          if(lthermal) then
+              if(.not.allocated(solver%plck)) call CHKERR(1_mpiint, 'planck radiation vec has to be allocated first')
+          endif
+
+          if(.not.allocated(solver%plex%edir_dm))  &
+            call CHKERR(1_mpiint, 'solver%plex%edir_dm not allocated, should have happened in init_solver?')
+          if(.not.allocated(solver%plex%ediff_dm)) &
+            call CHKERR(1_mpiint, 'solver%plex%ediff_dm not allocated, should have happened in init_solver?')
+          if(.not.allocated(solver%plex%abso_dm))  &
+            call CHKERR(1_mpiint, 'solver%plex%abso_dm not allocated, should have happened in init_solver?')
+        end subroutine
 
         subroutine debug_dump_vec(dm, vec, scalevec)
           type(tDM), intent(in) :: dm
@@ -1198,7 +1264,6 @@ module m_plex_rt
           integer(iintegers) :: dir_plex2bmc(solver%dirdof), diff_plex2bmc(solver%diffdof)
           real(ireals), pointer :: xedir(:)
           real(ireals) :: param_phi, param_theta, area_bot, area_top, dz, incsol
-          !real(ireals) :: dir2diff(solver%diffdof/2)
           logical :: lsrc(5)
 
           real(irealLUT) :: coeff(solver%dirdof*(solver%diffdof/2)), sumcoeff
@@ -1277,7 +1342,6 @@ module m_plex_rt
                 call PetscSectionGetDof(edirSection, isrc_face, numSrc, ierr); call CHKERR(ierr)
                 do isrc = 1, numSrc
                   in_dof = in_dof+1
-
                   if(.not.lsrc(isrc_side)) cycle
 
                   bmcsrcdof = dir_plex2bmc(in_dof)
@@ -1320,9 +1384,6 @@ module m_plex_rt
 
                     enddo ! outgoing_offsets
                   end associate
-!                        todo: sum up the coeffs and check that this is one-sum(dir2dir) if kabs=0, i.e. make sure that the sum of
-!                        coeffs that have been used is the sum of dir2diff, this energy conservation check would be useful in dir2dir
-!                        and diff2diff as well, just to make sure that we dont neglect any lut coeff contributions
                 enddo ! numSrc
             enddo ! srcfaces
             if(ldebug) then
@@ -1342,6 +1403,7 @@ module m_plex_rt
           enddo
 
           call set_Edir_srfc_reflection(edirSection, xedir)
+          !TODO: develop set_outside_incoming_src()
 
           call VecRestoreArrayReadF90(ledirVec, xedir, ierr); call CHKERR(ierr)
           call ISRestoreIndicesF90(solver%IS_diff_in_out_dof, xinoutdof, ierr); call CHKERR(ierr)
@@ -1597,7 +1659,7 @@ module m_plex_rt
         enddo
       end subroutine
 
-    subroutine solve_plex_rt(dm, b, A, ksp, x, ksp_residual_history, prefix)
+    subroutine solve_plex_rt(dm, b, A, ksp, x, ksp_residual_history, prefix, ksp_iter)
       type(tDM), intent(inout) :: dm
       type(tVec), allocatable, intent(in) :: b
       type(tMat), allocatable, intent(in) :: A
@@ -1605,6 +1667,7 @@ module m_plex_rt
       type(tVec), allocatable, intent(inout) :: x
       real(ireals), allocatable, intent(inout), optional :: ksp_residual_history(:)
       character(len=*),optional :: prefix
+      integer(iintegers), intent(out), optional :: ksp_iter
 
       real(ireals),parameter :: rtol=1e-6_ireals, rel_atol=1e-6_ireals
       integer(iintegers),parameter  :: maxiter=1000
@@ -1671,6 +1734,8 @@ module m_plex_rt
 
       call hegedus_trick(ksp, b, x)
       call KSPSolve(ksp, b, x, ierr); call CHKERR(ierr)
+
+      call KSPGetIterationNumber(ksp, ksp_iter, ierr); call CHKERR(ierr)
 
       call handle_diverged_solve()
 
@@ -2527,12 +2592,12 @@ module m_plex_rt
         endif
 
 
-        sideward_bc_coeff = one
+        sideward_bc_coeff = -one
         call PetscOptionsGetReal(PETSC_NULL_OPTIONS, PETSC_NULL_CHARACTER,"-sideward_bc_coeff", &
           sideward_bc_coeff, lflg, ierr); call CHKERR(ierr)
 
         call DMGetStratumIS(plex%geom_dm, 'DomainBoundary', SIDEFACE, bc_ids, ierr); call CHKERR(ierr)
-        if (bc_ids.eq.PETSC_NULL_IS.or.sideward_bc_coeff.le.zero) then ! dont have surface points
+        if (bc_ids.eq.PETSC_NULL_IS.or.approx(sideward_bc_coeff, zero)) then ! dont have surface points
         else
           call ISGetIndicesF90(bc_ids, xi, ierr); call CHKERR(ierr)
           do i = 1, size(xi)
@@ -2546,7 +2611,7 @@ module m_plex_rt
                 call PetscSectionGetFieldOffset(ediffSection, iface, istream-i1, offset_Ein, ierr); call CHKERR(ierr)
                 offset_Eout = offset_Ein+i1
 
-                call MatSetValuesLocal(A, i1, offset_Ein, i1, offset_Eout, -sideward_bc_coeff, INSERT_VALUES, ierr)
+                call MatSetValuesLocal(A, i1, offset_Ein, i1, offset_Eout, sideward_bc_coeff, INSERT_VALUES, ierr)
                 call CHKERR(ierr)
                 if(ldebug.and.offset_Ein.eq.offset_Eout) call CHKERR(1_mpiint, &
                   'src and dst are the same :( ... should not happen here'// &

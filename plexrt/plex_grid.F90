@@ -801,7 +801,6 @@ module m_plex_grid
       type(tDM), allocatable, intent(inout) :: dm
       type(tPetscSection) :: section
       integer(mpiint) :: ierr
-      !logical :: luseCone, luseClosure
 
 
       if(allocated(dm)) call CHKERR(1_mpiint, 'called setup_edir_dmplex on an already allocated DM')
@@ -1030,9 +1029,12 @@ module m_plex_grid
       integer(iintegers), pointer :: cells_of_face(:)
       integer(iintegers) :: i, iface, istream, neigh_cell, offset_a, offset_b
       integer(iintegers) :: j_incoming, j_outgoing, num_dof, num_fields, idof
-      integer(iintegers) :: boundarylabelval, owner
+      integer(iintegers) :: owner
       type(tPetscSection) :: section
       integer(mpiint) :: comm, myid, ierr
+
+      call PetscObjectGetComm(ediffdm, comm, ierr); call CHKERR(ierr)
+      call mpi_comm_rank(comm, myid, ierr); call CHKERR(ierr)
 
       call DMGetSection(ediffdm, section, ierr); call CHKERR(ierr)
       call PetscSectionGetNumFields(section, num_fields, ierr); call CHKERR(ierr)
@@ -1063,18 +1065,11 @@ module m_plex_grid
         call DMPlexGetSupport(ediffdm, iface, cells_of_face, ierr); call CHKERR(ierr) ! Get Faces of cell
         if(size(cells_of_face).eq.1) then
           ! This is either because we are at the outer domain or this is a local mesh boundary with a neighboring process
-          call DMLabelGetValue(plex%domainboundarylabel, iface, boundarylabelval, ierr); call CHKERR(ierr)
-          if(boundarylabelval.ne.-i1) then ! This is a global boundary face, i.e. at the side top or bottom of the domain
+          call DMLabelGetValue(plex%ownerlabel, iface, owner, ierr); call CHKERR(ierr)
+          if(owner.eq.myid) then
             neigh_cell = -1
           else
-            call DMLabelGetValue(plex%ownerlabel, iface, owner, ierr); call CHKERR(ierr)
-            call PetscObjectGetComm(ediffdm, comm, ierr); call CHKERR(ierr)
-            call mpi_comm_rank(comm, myid, ierr); call CHKERR(ierr)
-            if(owner.eq.myid) then
-              neigh_cell = -1
-            else
-              neigh_cell = huge(icell)
-            endif
+            neigh_cell = huge(icell)
           endif
         else
           if(cells_of_face(1).eq.icell) then
@@ -1090,7 +1085,6 @@ module m_plex_grid
           if(num_dof.eq.2) then
             call PetscSectionGetFieldOffset(section, iface, istream-i1, offset_a, ierr); call CHKERR(ierr)
             offset_b = offset_a+1
-            !print *,icell,'iface', iface, 'stream', istream, 'offset', offset_a, offset_b
 
             if(neigh_cell.lt.icell) then ! see definition of directions in setup_ediff_dmplex
               incoming_offsets(j_incoming) = offset_a
